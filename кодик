@@ -1,0 +1,181 @@
+import csv
+import torch
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
+from sklearn.metrics import f1_score
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+ 
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
+ 
+def load_data(filename):
+    with open(filename, 'r') as f:
+        reader = csv.reader(f, delimiter=';')
+        next(reader)  # Пропускаем заголовок
+        data = list(reader)
+ 
+    # Проверка на наличие достаточного количества столбцов
+    for row in data:
+        if len(row) < 3:
+            print(f"Строка имеет меньше 3 столбцов: {row}")
+            pass
+ 
+    # Извлечение сообщений и меток
+    messages = [row[2] for row in data]
+    labels = [row[1] for row in data]
+ 
+    # Очистка текста, лемматизация и удаление стоп-слов
+    lemmatizer = WordNetLemmatizer()
+    stop_words = set(stopwords.words('russian'))
+ 
+    cleaned_messages = []
+    for message in messages:
+        # Токенизация
+        word_tokens = word_tokenize(message)
+        # Лемматизация и удаление стоп-слов
+        cleaned_message = ' '.join([lemmatizer.lemmatize(w) for w in word_tokens if not w in stop_words])
+        cleaned_messages.append(cleaned_message)
+ 
+    messages = cleaned_messages
+ 
+ 
+    # Кодирование меток
+    encoder = LabelEncoder()
+    labels = encoder.fit_transform(labels)
+    return messages, labels, encoder
+ 
+ 
+ 
+def compute_accuracy(preds, labels):
+    return (preds == labels).mean()
+ 
+class MessageDataset(Dataset):
+    def __init__(self, messages, labels, tokenizer, max_length):
+        self.messages = messages
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+ 
+    def __len__(self):
+        return len(self.messages)
+ 
+    def __getitem__(self, idx):
+        message = self.messages[idx]
+        label = self.labels[idx]
+        encoding = self.tokenizer.encode_plus(
+            message,
+            add_special_tokens=True,
+            max_length=self.max_length,
+            return_token_type_ids=False,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            return_tensors='pt',
+        )
+        return {
+            'message_text': message,
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'labels': torch.tensor(label, dtype=torch.long)
+        }
+ 
+def predict(text, model, tokenizer, encoder):
+    # Преобразование текста в формат, подходящий для модели
+    inputs = tokenizer.encode_plus(
+        text,
+        add_special_tokens=True,
+        max_length=128,
+        return_token_type_ids=False,
+        padding='max_length',
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors='pt',
+    )
+ 
+    # Получение предсказания от модели
+    outputs = model(inputs['input_ids'], attention_mask=inputs['attention_mask'])
+ 
+    # Выбор класса с наибольшим выходным значением
+    pred = torch.argmax(outputs.logits, dim=1)
+ 
+    # Проверка на наличие предсказанной метки в обучающем наборе данных
+    if pred.item() in encoder.classes_:
+        # Декодирование предсказанной метки обратно в название группы тем
+        pred_label = encoder.inverse_transform(pred.detach().numpy())
+    else:
+        pred_label = ['Unknown']
+ 
+    return pred_label[0]
+ 
+ 
+# Загрузка предварительно обученной модели и токенизатора
+model_name = 'bert-base-uncased'
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=27)
+ 
+# Загрузка и предобработка данных
+messages, labels, encoder = load_data('train_dataset_train.csv')
+dataset = MessageDataset(messages, labels, tokenizer, max_length=128)
+loader = DataLoader(dataset, batch_size=16)
+ 
+# Оптимизатор
+optimizer = AdamW(model.parameters(), lr=1e-5)
+ 
+# Количество эпох
+epochs = 10
+ 
+# Обучение модели
+for epoch in range(epochs):
+    for batch in loader:
+        input_ids = batch['input_ids']
+        attention_mask = batch['attention_mask']
+        labels = batch['labels']
+ 
+        # Обнуление градиентов
+        optimizer.zero_grad()
+ 
+        # Прямой проход
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+ 
+        # Вычисление потерь
+        loss = outputs.loss
+ 
+        # Обратный проход
+        loss.backward()
+ 
+        # Шаг оптимизации
+        optimizer.step()
+ 
+    # Вычисление точности и F1-score после каждой эпохи
+    preds = np.argmax(outputs.logits.detach().numpy(), axis=1)
+    acc = compute_accuracy(preds, labels.detach().numpy())
+    f1 = f1_score(labels.detach().numpy(), preds, average='weighted')
+    print(f'Accuracy after epoch {epoch + 1}: {acc:.2f}')
+    print(f'F1-score after epoch {epoch + 1}: {f1:.2f}')
+ 
+ 
+# Предсказание группы тем для нового запроса
+text = input("Введите ваш запрос: ")
+pred = predict(text, model, tokenizer, encoder)
+print(f'Предсказанная группа тем: {pred}')
+ while True:
+    print("1. ввести запрос")
+    print("0. завершить")
+    cmd = input("Выберите пункт: ")
+    
+    if cmd == "1":
+        # действие 1
+    elif cmd == "2":
+        # действие 2
+    elif cmd == "3":
+        # действие 3
+    elif cmd == "0":
+        break
+    else:
+        print("Вы ввели не правильное значение"
